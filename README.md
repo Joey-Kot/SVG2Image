@@ -44,7 +44,7 @@ For an input file at `/path/image.svg`, the program writes the output file next 
 image.webp
 ```
 
-The extension is automatically selected from `--format`. SVG text is resolved from available system fonts and converted to vector paths before the SVG is rasterized. This avoids downstream text-rendering differences; the chosen system font must still be available at conversion time.
+The extension is automatically selected from `--format`. SVG text is resolved from available system fonts and converted to vector paths before the SVG is rasterized. This avoids downstream text-rendering differences. If none of the font families declared for a text span can be matched locally, the program writes a consolidated warning listing the unresolved font-family combinations to standard error, then continues with the existing fallback behavior; affected text may render incorrectly or be omitted.
 
 If an output file with the same name already exists, the program reports an error and stops to avoid overwriting it.
 

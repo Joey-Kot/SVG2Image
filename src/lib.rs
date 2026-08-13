@@ -1,7 +1,9 @@
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, ValueEnum};
@@ -9,7 +11,8 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ExtendedColorType, ImageEncoder};
 use resvg::tiny_skia::{IntSize, Pixmap, Transform};
-use resvg::usvg::{Options, Tree};
+use resvg::usvg::fontdb::{Database, Family as DatabaseFamily, Query, Weight};
+use resvg::usvg::{Font, FontFamily, FontResolver, Options, Tree};
 use webp::Encoder as WebpEncoder;
 
 const DEFAULT_QUALITY: f32 = 0.85;
@@ -93,12 +96,122 @@ struct RenderPlan {
     scale_y: f32,
 }
 
+#[derive(Clone, Default)]
+struct MissingFontWarnings {
+    families: Arc<Mutex<BTreeSet<String>>>,
+}
+
+impl MissingFontWarnings {
+    fn install(&self, options: &mut Options<'_>) {
+        let warnings = self.clone();
+        let default_selector = FontResolver::default_font_selector();
+        options.font_resolver.select_font = Box::new(move |font, database| {
+            if !has_declared_font_match(font, database) {
+                warnings.record(font);
+            }
+            default_selector(font, database)
+        });
+    }
+
+    fn record(&self, font: &Font) {
+        let unresolved_families = font
+            .families()
+            .iter()
+            .map(font_family_name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut families = self
+            .families
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        families.insert(unresolved_families);
+    }
+
+    fn message(&self) -> Option<String> {
+        let families = self
+            .families
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if families.is_empty() {
+            return None;
+        }
+
+        let families = families
+            .iter()
+            .map(|family| format!("“{family}”"))
+            .collect::<Vec<_>>()
+            .join("、");
+        Some(format!(
+            "警告：本地未找到以下 SVG 字体族组合：{families}；将继续按现有字体回退规则转换，相关文本可能显示异常或缺失。"
+        ))
+    }
+
+    fn write_to(&self, output: &mut dyn Write) {
+        if let Some(message) = self.message() {
+            let _ = writeln!(output, "{message}");
+        }
+    }
+}
+
+fn has_declared_font_match(font: &Font, database: &Database) -> bool {
+    let families = font
+        .families()
+        .iter()
+        .map(database_family)
+        .collect::<Vec<_>>();
+    database
+        .query(&Query {
+            families: &families,
+            weight: Weight(font.weight()),
+            stretch: font.stretch().into(),
+            style: font.style().into(),
+        })
+        .is_some()
+}
+
+fn database_family(family: &FontFamily) -> DatabaseFamily<'_> {
+    match family {
+        FontFamily::Serif => DatabaseFamily::Serif,
+        FontFamily::SansSerif => DatabaseFamily::SansSerif,
+        FontFamily::Cursive => DatabaseFamily::Cursive,
+        FontFamily::Fantasy => DatabaseFamily::Fantasy,
+        FontFamily::Monospace => DatabaseFamily::Monospace,
+        FontFamily::Named(name) => DatabaseFamily::Name(name),
+    }
+}
+
+fn font_family_name(family: &FontFamily) -> String {
+    match family {
+        FontFamily::Serif => "serif".to_owned(),
+        FontFamily::SansSerif => "sans-serif".to_owned(),
+        FontFamily::Cursive => "cursive".to_owned(),
+        FontFamily::Fantasy => "fantasy".to_owned(),
+        FontFamily::Monospace => "monospace".to_owned(),
+        FontFamily::Named(name) => name.clone(),
+    }
+}
+
 /// Parse command-line arguments and run the conversion.
 pub fn run() -> Result<()> {
     convert(Cli::parse())
 }
 
 fn convert(cli: Cli) -> Result<()> {
+    let stderr = std::io::stderr();
+    convert_with_warning_output(cli, &mut stderr.lock())
+}
+
+fn convert_with_warning_output(cli: Cli, warning_output: &mut dyn Write) -> Result<()> {
+    convert_with_options(cli, warning_output, |options| {
+        options.fontdb_mut().load_system_fonts();
+    })
+}
+
+fn convert_with_options(
+    cli: Cli,
+    warning_output: &mut dyn Write,
+    load_fonts: impl FnOnce(&mut Options<'_>),
+) -> Result<()> {
     validate_svg_path(&cli.file)?;
 
     let mut options = Options {
@@ -107,7 +220,9 @@ fn convert(cli: Cli) -> Result<()> {
     };
     // usvg resolves font references with the system font database while parsing.
     // Text is represented as paths in the render tree before rasterization.
-    options.fontdb_mut().load_system_fonts();
+    load_fonts(&mut options);
+    let missing_font_warnings = MissingFontWarnings::default();
+    missing_font_warnings.install(&mut options);
 
     let svg_bytes =
         fs::read(&cli.file).with_context(|| format!("无法读取 SVG 文件 {}", cli.file.display()))?;
@@ -122,6 +237,7 @@ fn convert(cli: Cli) -> Result<()> {
     validate_format_dimensions(cli.format, plan.size)?;
 
     let output_path = output_path(&cli.file, cli.format)?;
+    missing_font_warnings.write_to(warning_output);
 
     println!(
         "开始转换：格式 {}，尺寸 {}x{}，输出文件 {}",
@@ -495,7 +611,7 @@ mod tests {
     fn converts_an_svg_with_text_to_webp() {
         let temp = tempfile::tempdir().unwrap();
         let svg_path = temp.path().join("sample.svg");
-        fs::write(&svg_path, r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><rect width="100" height="50" fill="red"/><text x="10" y="35" fill="white" font-size="24">Hi</text></svg>"#).unwrap();
+        fs::write(&svg_path, r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><rect width="100" height="50" fill="red"/><text x="10" y="35" fill="white" font-family="DejaVu Sans" font-size="24">Hi</text></svg>"#).unwrap();
 
         convert(Cli {
             file: svg_path,
@@ -508,6 +624,106 @@ mod tests {
         let bytes = fs::read(temp.path().join("sample.webp")).unwrap();
         let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::WebP).unwrap();
         assert_eq!(image.dimensions(), (200, 100));
+    }
+
+    #[test]
+    fn warns_for_the_default_font_when_no_local_fonts_are_available() {
+        let temp = tempfile::tempdir().unwrap();
+        let svg_path = temp.path().join("no-local-fonts.svg");
+        fs::write(
+            &svg_path,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><text x="5" y="30">Text</text></svg>"#,
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        convert_with_options(
+            Cli {
+                file: svg_path,
+                size: SizeSpec::Exact(OutputSize {
+                    width: 100,
+                    height: 50,
+                }),
+                format: OutputFormat::Png,
+                quality: DEFAULT_QUALITY,
+            },
+            &mut warnings,
+            |_| {},
+        )
+        .unwrap();
+
+        assert!(temp.path().join("no-local-fonts.png").is_file());
+        assert_eq!(
+            String::from_utf8(warnings).unwrap(),
+            "警告：本地未找到以下 SVG 字体族组合：“Times New Roman”；将继续按现有字体回退规则转换，相关文本可能显示异常或缺失。\n"
+        );
+    }
+
+    #[test]
+    fn warns_once_for_missing_declared_fonts_and_still_converts() {
+        let temp = tempfile::tempdir().unwrap();
+        let svg_path = temp.path().join("missing-fonts.svg");
+        fs::write(
+            &svg_path,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">
+                <rect width="200" height="80" fill="white"/>
+                <text x="5" y="30" font-family="Definitely Missing B, Definitely Missing A">One</text>
+                <text x="5" y="60" font-family="Definitely Missing A">Two</text>
+            </svg>"#,
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        convert_with_warning_output(
+            Cli {
+                file: svg_path,
+                size: SizeSpec::Exact(OutputSize {
+                    width: 200,
+                    height: 80,
+                }),
+                format: OutputFormat::Png,
+                quality: DEFAULT_QUALITY,
+            },
+            &mut warnings,
+        )
+        .unwrap();
+
+        assert!(temp.path().join("missing-fonts.png").is_file());
+        assert_eq!(
+            String::from_utf8(warnings).unwrap(),
+            "警告：本地未找到以下 SVG 字体族组合：“Definitely Missing A”、“Definitely Missing B, Definitely Missing A”；将继续按现有字体回退规则转换，相关文本可能显示异常或缺失。\n"
+        );
+    }
+
+    #[test]
+    fn does_not_warn_when_a_later_declared_font_is_available() {
+        let mut options = Options::default();
+        options.fontdb_mut().load_system_fonts();
+        if options
+            .fontdb
+            .query(&Query {
+                families: &[DatabaseFamily::Name("DejaVu Serif")],
+                weight: Weight::NORMAL,
+                stretch: resvg::usvg::fontdb::Stretch::Normal,
+                style: resvg::usvg::fontdb::Style::Normal,
+            })
+            .is_none()
+        {
+            #[cfg(target_os = "linux")]
+            panic!("Linux test environment must provide DejaVu Serif");
+            #[cfg(not(target_os = "linux"))]
+            return;
+        }
+
+        let warnings = MissingFontWarnings::default();
+        warnings.install(&mut options);
+        Tree::from_str(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50"><text x="0" y="30" font-family="Definitely Missing, DejaVu Serif">Text</text></svg>"#,
+            &options,
+        )
+        .unwrap();
+
+        assert_eq!(warnings.message(), None);
     }
 
     #[test]
