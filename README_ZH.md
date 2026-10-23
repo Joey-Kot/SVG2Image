@@ -50,10 +50,10 @@ image.webp
 
 ## 本地编译
 
-需要 Rust `1.92` 或更高版本：
+需要 Rust `1.99.1` 或更高版本；本地工具链和 CI 默认固定为 `1.99.1`：
 
 ```bash
-cargo build --release
+cargo build --locked --release
 ```
 
 编译结果位于 `target/release/svg2image`；Windows 下为 `target/release/svg2image.exe`。

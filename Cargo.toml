@@ -2,7 +2,7 @@
 name = "svg2image"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.99.1"
 description = "A cross-platform CLI that converts SVG files to WebP, PNG, or JPEG images."
 
 [dependencies]

@@ -50,10 +50,10 @@ If an output file with the same name already exists, the program reports an erro
 
 ## Building Locally
 
-Rust `1.92` or later is required:
+Rust `1.99.1` or later is required; the local toolchain and CI default to `1.99.1`:
 
 ```bash
-cargo build --release
+cargo build --locked --release
 ```
 
 The resulting executable is located at `target/release/svg2image`, or `target/release/svg2image.exe` on Windows.

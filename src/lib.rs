@@ -488,7 +488,7 @@ fn encode_jpeg(rgba: &[u8], size: OutputSize, quality: f32) -> Result<Vec<u8>> {
     let mut rgb = Vec::new();
     rgb.try_reserve_exact(rgb_len)
         .map_err(|error| anyhow::anyhow!("无法为 JPG 编码分配内存：{error}"))?;
-    for pixel in rgba.chunks_exact(4) {
+    for pixel in rgba.as_chunks::<4>().0 {
         let alpha = u16::from(pixel[3]);
         for channel in &pixel[..3] {
             let composited =
