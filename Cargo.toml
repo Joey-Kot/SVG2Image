@@ -8,8 +8,10 @@ description = "A cross-platform CLI that converts SVG files to WebP, PNG, or JPE
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
+clap_complete = { version = "=4.6.12", features = ["unstable-dynamic"] }
 image = { version = "0.25.8", default-features = false, features = ["jpeg", "png"] }
 resvg = "0.48.1"
+shlex = "2.0"
 webp = { version = "0.3.1", default-features = false }
 
 [patch.crates-io]

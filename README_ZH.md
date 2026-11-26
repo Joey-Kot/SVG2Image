@@ -36,6 +36,22 @@ svg2image --file image.svg --size '1600*-1' --format jpg --quality 0.9
 
 也可以运行 `svg2image --help` 查看帮助。
 
+## Shell 补全
+
+将 `svg2image` 放入 `PATH` 后，在对应 Shell 里运行命令即可为当前会话启用补全。
+
+| Shell | 启用命令 |
+| --- | --- |
+| Bash | `source <(svg2image completion bash)` |
+| Zsh | `source <(svg2image completion zsh)` |
+| Fish | `svg2image completion fish \| source` |
+| PowerShell | `svg2image completion powershell \| Out-String \| Invoke-Expression` |
+| Elvish | `eval (svg2image completion elvish \| slurp)` |
+
+如果 Zsh 尚未初始化补全，先运行 `autoload -Uz compinit && compinit`。要在新会话中自动启用，把对应命令加到 Shell 的启动配置。
+
+补全包括输出格式、常用尺寸和画质值，以及 SVG 文件路径。
+
 ## 输出规则
 
 输入文件为 `/path/image.svg` 时，程序会在同目录输出：

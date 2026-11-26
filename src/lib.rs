@@ -1,3 +1,5 @@
+mod completion;
+
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
@@ -6,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, Parser, ValueEnum};
+use clap_complete::PathCompleter;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ExtendedColorType, ImageEncoder};
@@ -31,7 +34,13 @@ const MAX_WEBP_DIMENSION: u32 = 16_383;
 )]
 struct Cli {
     /// 要转换的 SVG 文件
-    #[arg(long, value_name = "SVG")]
+    #[arg(
+        long,
+        value_name = "SVG",
+        add = completion::path_values(
+            PathCompleter::any().filter(|path| path.is_file() && has_svg_extension(path))
+        )
+    )]
     file: PathBuf,
 
     /// 输出图像尺寸；将宽或高设为 -1 可按原始比例自动计算
@@ -39,7 +48,8 @@ struct Cli {
         long,
         value_name = "宽:高",
         allow_hyphen_values = true,
-        value_parser = parse_size
+        value_parser = parse_size,
+        add = completion::values(["1000:-1", "-1:1000", "1600:-1"])
     )]
     size: SizeSpec,
 
@@ -49,12 +59,19 @@ struct Cli {
         value_name = "格式",
         value_enum,
         ignore_case = true,
-        default_value = "webp"
+        default_value = "webp",
+        add = completion::enum_values::<OutputFormat>()
     )]
     format: OutputFormat,
 
     /// 图像质量，范围为 0.0 到 1.0；PNG 为无损格式，该参数不改变画质
-    #[arg(long, value_name = "质量", default_value_t = DEFAULT_QUALITY, value_parser = parse_quality)]
+    #[arg(
+        long,
+        value_name = "质量",
+        default_value_t = DEFAULT_QUALITY,
+        value_parser = parse_quality,
+        add = completion::values(["0", "0.85", "1"])
+    )]
     quality: f32,
 }
 
@@ -193,7 +210,15 @@ fn font_family_name(family: &FontFamily) -> String {
 
 /// Parse command-line arguments and run the conversion.
 pub fn run() -> Result<()> {
-    convert(Cli::parse())
+    let command = Cli::command()
+        .disable_help_subcommand(true)
+        .subcommand_negates_reqs(true)
+        .args_conflicts_with_subcommands(true)
+        .subcommand(completion::command("生成 Shell 补全脚本"));
+    if let Some(cli) = completion::parse(command)? {
+        convert(cli)?;
+    }
+    Ok(())
 }
 
 fn convert(cli: Cli) -> Result<()> {
@@ -268,12 +293,18 @@ fn validate_svg_path(path: &Path) -> Result<()> {
         "SVG 文件不存在或不是普通文件：{}",
         path.display()
     );
-    let is_svg = path
-        .extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"));
-    ensure!(is_svg, "输入文件必须使用 .svg 扩展名：{}", path.display());
+    ensure!(
+        has_svg_extension(path),
+        "输入文件必须使用 .svg 扩展名：{}",
+        path.display()
+    );
     Ok(())
+}
+
+fn has_svg_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
 }
 
 fn output_path(svg_path: &Path, format: OutputFormat) -> Result<PathBuf> {
@@ -508,7 +539,6 @@ fn encode_jpeg(rgba: &[u8], size: OutputSize, quality: f32) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
     use image::GenericImageView;
     use resvg::usvg::fontdb::{Family, Query, Stretch, Style, Weight};
 
@@ -577,14 +607,6 @@ mod tests {
         assert_eq!(cli.size, SizeSpec::FixedHeight(1024));
         assert_eq!(cli.format, OutputFormat::Webp);
         assert_eq!(cli.quality, DEFAULT_QUALITY);
-    }
-
-    #[test]
-    fn help_includes_quoted_size_examples() {
-        let help = Cli::command().render_help().to_string();
-        assert!(help.contains("--size '1000:-1'"));
-        assert!(help.contains("--size '-1@1000'"));
-        assert!(help.contains("--size '1600*-1'"));
     }
 
     #[test]

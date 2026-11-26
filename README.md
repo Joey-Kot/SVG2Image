@@ -36,6 +36,22 @@ svg2image --file image.svg --size '1600*-1' --format jpg --quality 0.9
 
 Run `svg2image --help` to view the command-line help.
 
+## Shell completion
+
+With `svg2image` on your `PATH`, run the command for your shell to enable completion in the current session.
+
+| Shell | Command |
+| --- | --- |
+| Bash | `source <(svg2image completion bash)` |
+| Zsh | `source <(svg2image completion zsh)` |
+| Fish | `svg2image completion fish \| source` |
+| PowerShell | `svg2image completion powershell \| Out-String \| Invoke-Expression` |
+| Elvish | `eval (svg2image completion elvish \| slurp)` |
+
+If Zsh completion has yet to be initialized, run `autoload -Uz compinit && compinit` first. For future sessions, add the corresponding command to your shell startup configuration.
+
+Completion includes the output format, common sizes and quality values, and SVG paths.
+
 ## Output Rules
 
 For an input file at `/path/image.svg`, the program writes the output file next to it:
